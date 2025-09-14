@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NoCode AI Studio - AI Powered Prototype</title>
+  <style>
+    :root{--muted:#6b7280;--panel:#fff;--accent:#6366f1}
+    body{margin:0;font-family:Inter,Arial,sans-serif;background:#f3f4f6;color:#0f172a}
+    header{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--panel);border-bottom:1px solid #e6e9ef}
+    header h1{font-size:16px;margin:0}
+    #app{display:grid;grid-template-columns:220px 1fr 360px;height:calc(100vh - 56px)}
+    aside{padding:12px;border-right:1px solid #e6e9ef;background:var(--panel);overflow:auto}
+    #left{grid-row:1 / span 2}
+    main{padding:16px;overflow:auto}
+    #canvas{background:#fff;border:1px solid #e6e9ef;border-radius:8px;min-height:420px;padding:12px}
+    .palette-item{padding:8px;margin:6px 0;background:#f8fafc;border:1px solid #e6e9ef;border-radius:6px;cursor:grab}
+    .element{padding:10px;border-radius:8px;background:#fafafa;border:1px solid transparent;margin-bottom:8px}
+    .element.selected{border-color:var(--accent);box-shadow:0 4px 14px rgba(99,102,241,0.08)}
+    #inspector{display:flex;flex-direction:column;height:100%}
+    label{display:block;font-size:12px;color:var(--muted);margin-top:8px}
+    input,textarea,button{font-size:13px;padding:8px;border-radius:6px;border:1px solid #dbe2f0}
+    .btn{background:var(--accent);color:#fff;border:none;padding:8px 10px;border-radius:6px;cursor:pointer}
+    .btn.ghost{background:#f3f4f6;color:#111}
+    #aiMessages{background:#0b1220;color:#e6eef8;padding:10px;border-radius:6px;height:160px;overflow:auto;font-family:monospace;font-size:12px}
+    #codePreview{background:#0b1220;color:#e6eef8;padding:10px;border-radius:6px;height:200px;overflow:auto;font-family:monospace;font-size:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>NoCode AI Studio — AI Builder</h1>
+    <div style="display:flex;gap:8px">
+      <button class="btn" onclick="aiGenerateFull()">AI: Generate full app</button>
+      <button class="btn" onclick="exportScaffold()">Export</button>
+    </div>
+  </header>
+
+  <div id="app">
+    <!-- LEFT: Palette -->
+    <aside id="left">
+      <h3>Palette</h3>
+      <div id="palette-items"></div>
+    </aside>
+
+    <!-- CENTER: Canvas -->
+    <main>
+      <h3>Canvas</h3>
+      <div id="canvas" ondragover="event.preventDefault()" ondrop="handleDrop(event)"></div>
+    </main>
+
+    <!-- RIGHT: Inspector + AI -->
+    <aside id="inspector">
+      <h3>Inspector</h3>
+      <div id="inspector-content">Select a component to edit properties.</div>
+
+      <h3 style="margin-top:12px">AI Assistant</h3>
+      <div id="aiMessages"></div>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <input id="aiInput" placeholder="Ask AI..." style="flex:1" onkeydown="if(event.key==='Enter') sendAIMessage()" />
+        <button class="btn" onclick="sendAIMessage()">Send</button>
+      </div>
+
+      <h3 style="margin-top:12px">Code Preview</h3>
+      <div id="codePreview">No code yet.</div>
+    </aside>
+  </div>
+
+  <script>
+    // ----- State -----
+    const PALETTE=[
+      {type:'Text',display:'Text',defaultProps:{text:'Sample text',size:20}},
+      {type:'Button',display:'Button',defaultProps:{label:'Click Me'}},
+      {type:'Image',display:'Image',defaultProps:{src:'https://via.placeholder.com/400',alt:'sample'}}
+    ];
+    let elements=[]; let selectedId=null; let codeFiles=null;
+
+    const paletteContainer=document.getElementById('palette-items');
+    const canvas=document.getElementById('canvas');
+    const inspectorContent=document.getElementById('inspector-content');
+    const aiMessages=document.getElementById('aiMessages');
+    const aiInput=document.getElementById('aiInput');
+    const codePreview=document.getElementById('codePreview');
+
+    function uid(){return 'id_'+Math.random().toString(36).slice(2,8)}
+
+    // ----- Palette Render -----
+    PALETTE.forEach(p=>{
+      const d=document.createElement('div');
+      d.className='palette-item';
+      d.textContent=p.display;
+      d.draggable=true;
+      d.ondragstart=e=>e.dataTransfer.setData('item',JSON.stringify(p));
+      paletteContainer.appendChild(d);
+    });
+
+    function handleDrop(e){
+      const data=e.dataTransfer.getData('item');
+      if(!data)return; const item=JSON.parse(data);
+      const el={id:uid(),type:item.type,props:{...item.defaultProps}};
+      elements.push(el); selectedId=el.id; render();
+    }
+
+    // ----- Render Canvas -----
+    function render(){
+      canvas.innerHTML='';
+      elements.forEach(el=>{
+        const wrap=document.createElement('div');
+        wrap.className='element'+(selectedId===el.id?' selected':'');
+        wrap.onclick=()=>{selectedId=el.id;render();};
+        wrap.innerHTML=renderElement(el);
+        canvas.appendChild(wrap);
+      });
+      renderInspector();
+    }
+
+    function renderElement(el){
+      const p=el.props;
+      switch(el.type){
+        case 'Text': return `<div style="font-size:${p.size}px">${p.text}</div>`;
+        case 'Button': return `<button>${p.label}</button>`;
+        case 'Image': return `<img src="${p.src}" alt="${p.alt}" style="max-width:100%"/>`;
+        default: return '<div>Unknown</div>';
+      }
+    }
+
+    // ----- Inspector -----
+    function renderInspector(){
+      if(!selectedId){inspectorContent.innerHTML='Select a component.';return;}
+      const el=elements.find(x=>x.id===selectedId);
+      let html=`<div><strong>${el.type}</strong></div>`;
+      for(const k in el.props){
+        html+=`<label>${k}<input value="${el.props[k]}" onchange="updateProp('${k}',this.value)"/></label>`;
+      }
+      inspectorContent.innerHTML=html;
+    }
+    function updateProp(k,v){const el=elements.find(x=>x.id===selectedId);el.props[k]=v;render();}
+
+    // ----- AI Assistant -----
+    function addAIMessage(sender,text){
+      const d=document.createElement('div');
+      d.textContent=sender+': '+text;
+      aiMessages.appendChild(d);
+      aiMessages.scrollTop=aiMessages.scrollHeight;
+    }
+
+    function sendAIMessage(){
+      const q=aiInput.value.trim(); if(!q)return;
+      addAIMessage('You',q); aiInput.value='';
+      setTimeout(()=>handleAIResponse(q),400);
+    }
+
+    function handleAIResponse(q){
+      let reply=""; let code="";
+
+      if(/landing/i.test(q)){
+        reply="Generated landing page code.";
+        code=`<div class='hero'>\n  <h1>Welcome</h1>\n  <p>Your app tagline</p>\n  <button>Get Started</button>\n</div>`;
+        insertLanding();
+      } else if(/auth|login|signup/i.test(q)){
+        reply="Generated authentication backend (Express.js).";
+        code=`const express=require('express');\nconst app=express();\napp.use(express.json());\napp.post('/signup',(req,res)=>res.send('User signed up!'));\napp.post('/login',(req,res)=>res.send('User logged in!'));\napp.listen(4000);`;
+      } else if(/database/i.test(q)){
+        reply="Generated SQL schema.";
+        code=`CREATE TABLE users (id SERIAL PRIMARY KEY, email VARCHAR(255), password VARCHAR(255));`;
+      } else if(/button/i.test(q)){
+        reply="Generated a styled button.";
+        code=`<button style='background:#4f46e5;color:#fff;padding:10px 18px;border:none;border-radius:6px'>Click Me</button>`;
+      } else if(/calculator/i.test(q)){
+        reply="Generated a working calculator widget.";
+        code=`<div id=\"calc\">\n  <input id=\"display\" disabled />\n  <div id=\"keys\">\n    <button>7</button><button>8</button><button>9</button><button>/</button>\n    <button>4</button><button>5</button><button>6</button><button>*</button>\n    <button>1</button><button>2</button><button>3</button><button>-</button>\n    <button>0</button><button>.</button><button>=</button><button>+</button>\n  </div>\n</div>\n<script>\n  const disp=document.getElementById('display');\n  document.querySelectorAll('#keys button').forEach(b=>{\n    b.onclick=()=>{\n      if(b.textContent==='='){disp.value=eval(disp.value);} else {disp.value+=b.textContent;}\n    };\n  });\n<\/script>`;
+      } else {
+        reply="Generated default HTML snippet for your prompt.";
+        code=`<!-- Prompt: ${q} -->\n<div>${q}</div>`;
+      }
+
+      addAIMessage('AI',reply);
+      codePreview.textContent=code;
+    }
+
+    function insertLanding(){
+      elements.push({id:uid(),type:'Text',props:{text:'Welcome to the landing',size:26}});
+      elements.push({id:uid(),type:'Button',props:{label:'Get Started'}});
+      render();
+    }
+
+    // ----- Generate full app scaffold -----
+    function aiGenerateFull(){
+      addAIMessage('AI','Generated full scaffold (mock).');
+      codePreview.textContent=`index.html, styles.css, server.js, schema.sql...`;
+    }
+
+    // ----- Export scaffold -----
+    function exportScaffold(){
+      if(!codePreview.textContent){alert('No code to export');return;}
+      const blob=new Blob([codePreview.textContent],{type:'text/plain'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);a.download='generated_code.txt';a.click();
+    }
+
+    render();
+  </script>
+</body>
+</html>
